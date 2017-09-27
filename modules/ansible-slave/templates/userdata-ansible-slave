@@ -1,0 +1,84 @@
+#cloud-config
+
+repo_update: all
+repo_upgrade: all
+
+packages:
+ - python
+ - git
+ - net-tools
+ - bind-utils
+ - iptables-services
+ - bridge-utils
+ - unzip
+ - python27-devel.x86_64
+ - gcc
+ - libffi-devel
+ - openssl-devel
+
+
+write_files:
+ - content: |
+      #!/bin/sh
+      set -x
+      cd /root
+      git clone -b {release} https://github.com/openshift/openshift-ansible-contrib.git openshift-ansible
+      cd openshift-ansible
+
+   path: /root/ansible_pull.sh
+   permissions: '0755'
+ - content: |
+      # Create an OSEv3 group that contains the masters and nodes groups
+      [OSEv3:children]
+      masters
+      nodes
+      etcd
+
+      # Set variables common for all OSEv3 hosts
+      [OSEv3:vars]
+      # SSH user, this user should allow ssh based auth without requiring a password
+      ansible_ssh_user=centos
+
+      # If ansible_ssh_user is not root, ansible_become must be set to true
+      ansible_become=true
+
+      deployment_type=origin
+
+      # We need a wildcard DNS setup for our public access to services, fortunately
+      # we can use the superb xip.io to get one for free.
+      openshift_master_default_subdomain=${public_domain}
+
+      # uncomment the following to enable htpasswd authentication; defaults to DenyAllPasswordIdentityProvider
+      openshift_master_identity_providers=[{'name': 'htpasswd_auth', 'login': 'true', 'challenge': 'true', 'kind': 'HTPasswdPasswordIdentityProvider', 'filename': '/etc/origin/master/htpasswd'}]
+
+      # Uncomment the line below to enable metrics for the cluster.
+      # openshift_hosted_metrics_deploy=true
+
+      # Create the masters host group. Be explicit with the openshift_hostname,
+      # otherwise it will resolve to something like ip-10-0-1-98.ec2.internal and use
+      # that as the node name.
+      [masters]
+      master.${internal_domain} openshift_hostname=master.${internal_domain}
+
+      # host group for etcd
+      [etcd]
+      etcd1.${internal_domain}
+      etcd2.${internal_domain}
+      etcd3.${internal_domain}
+
+      # host group for nodes, includes region info
+      [nodes]
+      master.${internal_domain} openshift_node_labels="{'region': 'infra', 'purpose': 'master'}" openshift_schedulable=false
+      node1.${internal_domain} openshift_hostname=node1.${internal_domain} openshift_node_labels="{'region': 'primary', 'purpose': 'applications'}"
+      node2.${internal_domain} openshift_hostname=node2.${internal_domain} openshift_node_labels="{'region': 'primary', 'purpose': 'application'}"
+      node3.${internal_domain} openshift_hostname=node3.${internal_domain} openshift_node_labels="{'region': 'primary', 'purpose': 'infraapplications'}"
+  path: /root/openshift-ansible/inventory.cfg
+
+
+
+runcmd:
+- export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+- easy_install pip
+- /usr/local/bin/pip install --upgrade pip
+- /usr/local/bin/pip install -q awscli docker ansible boto boto3 botocore
+- sh -x /root/ansible_pull.sh
